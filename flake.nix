@@ -39,14 +39,11 @@
           rustPlatform.bindgenHook
         ];
 
+        # Darwin SDK frameworks (Security, Accelerate, Metal, Foundation) used
+        # to need explicit buildInputs. As of current nixpkgs they're auto-linked
+        # by stdenv, so nothing Darwin-specific belongs here.
         buildInputs = with pkgs; [
           secp256k1
-        ] ++ lib.optionals stdenv.isDarwin [
-          darwin.apple_sdk.frameworks.Security
-          darwin.apple_sdk.frameworks.Accelerate
-          darwin.apple_sdk.frameworks.Metal
-          darwin.apple_sdk.frameworks.MetalKit
-          darwin.apple_sdk.frameworks.Foundation
         ];
 
         # llama-cpp-sys-2 vendors llama.cpp source and compiles it via cmake in its
@@ -69,13 +66,29 @@
           pname = "gated-inference";
         });
 
+        # Model weights — Qwen2.5-0.5B-Instruct Q4_K_M GGUF.
+        # Pinned by SHA256: Nix's fixed-output derivation fetches in the sandbox
+        # and fails loudly on hash mismatch. If HF ever moves the file and the
+        # new content's hash doesn't match, the build fails safely.
+        modelWeights = pkgs.fetchurl {
+          url = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf";
+          hash = "sha256-dKTajJ/bzRW9H20B1iFBDTHG/ACYb162h4JOe5PXqds=";
+        };
+
+        # Small derivation whose store output is a /models tree. dockerTools.contents
+        # unions these into the image root, so the GGUF lands at /models/main.gguf.
+        modelLayer = pkgs.runCommand "gated-inference-model" { } ''
+          mkdir -p $out/models
+          cp ${modelWeights} $out/models/main.gguf
+        '';
+
         # Deterministic OCI image. The digest is a pure function of the pinned inputs
-        # (flake.lock + Cargo.lock + the source tree). Paste this digest into
-        # tinfoil-config.yml; it will be stable across build hosts.
+        # (flake.lock + Cargo.lock + the source tree + the pinned model hash).
+        # Paste this digest into tinfoil-config.yml; it will be stable across build hosts.
         dockerImage = pkgs.dockerTools.buildLayeredImage {
           name = "gated-inference-rs";
           tag = "latest";
-          contents = [ gatedInference pkgs.cacert ];
+          contents = [ gatedInference pkgs.cacert modelLayer ];
           config = {
             Cmd = [ "${gatedInference}/bin/gated-inference-server" ];
             ExposedPorts = { "8080/tcp" = { }; };
@@ -93,11 +106,15 @@
         ]);
       in
       {
+        # `dockerImage` is a Linux OCI image — expose it only for Linux systems.
+        # On Darwin, build it against an x86_64-linux system via a linux-builder,
+        # e.g. `nix build .#packages.x86_64-linux.docker`.
         packages = {
           default = gatedInference;
           server = gatedInference;
-          docker = dockerImage;
           python-client = pythonClient;
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          docker = dockerImage;
         };
 
         apps.default = {
