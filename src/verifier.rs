@@ -123,7 +123,11 @@ mod tests {
     use secp256k1::{rand::rngs::OsRng, Keypair, Secp256k1 as Secp};
     use serde_json::json;
 
-    fn sign_compact_b64(secp: &Secp<secp256k1::All>, kp: &Keypair, payload: &serde_json::Value) -> String {
+    fn sign_compact_b64(
+        secp: &Secp<secp256k1::All>,
+        kp: &Keypair,
+        payload: &serde_json::Value,
+    ) -> String {
         let canonical = canonical_json::to_bytes(payload);
         let digest: [u8; 32] = Sha256::digest(&canonical).into();
         let msg = Message::from_digest(digest);
@@ -132,7 +136,10 @@ mod tests {
     }
 
     fn fresh_payload(prompt: &str, nonce: &str) -> serde_json::Value {
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         json!({ "prompt": prompt, "nonce": nonce, "timestamp": ts })
     }
 
@@ -146,7 +153,12 @@ mod tests {
         let payload = fresh_payload("hi", "n1");
         let sig = sign_compact_b64(&secp, &kp, &payload);
 
-        let out = v.verify(&SignedPayload { payload, signature: sig }).unwrap();
+        let out = v
+            .verify(&SignedPayload {
+                payload,
+                signature: sig,
+            })
+            .unwrap();
         assert_eq!(out.prompt, "hi");
         assert_eq!(out.nonce, "n1");
     }
@@ -160,7 +172,10 @@ mod tests {
         let payload = fresh_payload("hi", "n1");
         let sig = sign_compact_b64(&secp, &attacker, &payload);
         assert!(matches!(
-            v.verify(&SignedPayload { payload, signature: sig }),
+            v.verify(&SignedPayload {
+                payload,
+                signature: sig
+            }),
             Err(VerifyError::BadSignature)
         ));
     }
@@ -176,7 +191,10 @@ mod tests {
         let mut tampered = payload.clone();
         tampered["prompt"] = json!("bye");
         assert!(matches!(
-            v.verify(&SignedPayload { payload: tampered, signature: sig }),
+            v.verify(&SignedPayload {
+                payload: tampered,
+                signature: sig
+            }),
             Err(VerifyError::BadSignature)
         ));
     }
@@ -189,7 +207,10 @@ mod tests {
         let payload = json!({ "prompt": "hi", "nonce": "n1", "timestamp": 0_i64 });
         let sig = sign_compact_b64(&secp, &kp, &payload);
         assert!(matches!(
-            v.verify(&SignedPayload { payload, signature: sig }),
+            v.verify(&SignedPayload {
+                payload,
+                signature: sig
+            }),
             Err(VerifyError::StaleTimestamp { .. })
         ));
     }
@@ -202,9 +223,17 @@ mod tests {
         let payload = fresh_payload("hi", "same-nonce");
         let sig = sign_compact_b64(&secp, &kp, &payload);
 
-        assert!(v.verify(&SignedPayload { payload: payload.clone(), signature: sig.clone() }).is_ok());
+        assert!(v
+            .verify(&SignedPayload {
+                payload: payload.clone(),
+                signature: sig.clone()
+            })
+            .is_ok());
         assert!(matches!(
-            v.verify(&SignedPayload { payload, signature: sig }),
+            v.verify(&SignedPayload {
+                payload,
+                signature: sig
+            }),
             Err(VerifyError::NonceReplay)
         ));
     }

@@ -23,10 +23,8 @@ pub fn to_bytes(value: &Value) -> Vec<u8> {
 fn sort_keys(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
-            let mut entries: Vec<(String, Value)> = map
-                .iter()
-                .map(|(k, v)| (k.clone(), sort_keys(v)))
-                .collect();
+            let mut entries: Vec<(String, Value)> =
+                map.iter().map(|(k, v)| (k.clone(), sort_keys(v))).collect();
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             let mut out = Map::with_capacity(entries.len());
             for (k, v) in entries {

@@ -75,8 +75,8 @@ async fn main() -> Result<()> {
         Backend::Stub
     } else {
         info!(model = %model_path.display(), n_ctx, max_tokens, "loading LLM weights");
-        let llama = LlamaSession::load(&model_path, n_ctx, max_tokens)
-            .context("loading llama model")?;
+        let llama =
+            LlamaSession::load(&model_path, n_ctx, max_tokens).context("loading llama model")?;
         info!("model loaded");
         Backend::Llama(llama)
     };
@@ -134,10 +134,7 @@ struct GenerateResponse {
     algorithm: &'static str,
 }
 
-async fn generate(
-    State(s): State<Arc<AppState>>,
-    Json(signed): Json<SignedPayload>,
-) -> Response {
+async fn generate(State(s): State<Arc<AppState>>, Json(signed): Json<SignedPayload>) -> Response {
     let payload = match s.verifier.verify(&signed) {
         Ok(p) => p,
         Err(e) => {

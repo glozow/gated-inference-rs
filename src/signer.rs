@@ -23,7 +23,11 @@ impl Signer {
         // deterministic RNG here — the session-ephemeral key must be unpredictable.
         let full = Secp256k1::new();
         let (secret, pubkey) = full.generate_keypair(&mut OsRng);
-        Self { secp, secret, pubkey }
+        Self {
+            secp,
+            secret,
+            pubkey,
+        }
     }
 
     /// 33-byte compressed SEC1 pubkey, hex-encoded (matches Verifier::new input format).
@@ -53,7 +57,10 @@ mod tests {
     fn signer_output_verifies_against_its_own_pubkey() {
         let signer = Signer::generate();
         let v = Verifier::new(&signer.public_key_hex(), 60, 16).unwrap();
-        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         let payload = json!({ "prompt": "x", "nonce": "unique", "timestamp": ts });
         let signature = signer.sign(&payload);
         assert!(v.verify(&SignedPayload { payload, signature }).is_ok());
