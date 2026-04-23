@@ -18,8 +18,8 @@ use llama_cpp_2::{
     context::params::LlamaContextParams,
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, AddBos, LlamaModel, Special},
-    token::data_array::LlamaTokenDataArray,
+    model::{params::LlamaModelParams, AddBos, LlamaModel},
+    sampling::LlamaSampler,
 };
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -73,14 +73,14 @@ impl LlamaSession {
         }
         ctx.decode(&mut batch).context("decode prompt")?;
 
+        let mut sampler = LlamaSampler::greedy();
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut out = String::new();
         let mut n_cur = tokens.len() as i32;
         let stop_at = n_cur + self.max_tokens as i32;
 
         while n_cur < stop_at {
-            let candidates = ctx.candidates_ith(batch.n_tokens() - 1);
-            let mut arr = LlamaTokenDataArray::from_iter(candidates, false);
-            let token = ctx.sample_token_greedy(arr);
+            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
 
             if self.model.is_eog_token(token) {
                 break;
@@ -88,7 +88,7 @@ impl LlamaSession {
 
             let piece = self
                 .model
-                .token_to_str(token, Special::Tokenize)
+                .token_to_piece(token, &mut decoder, true, None)
                 .context("detokenize")?;
             out.push_str(&piece);
 
