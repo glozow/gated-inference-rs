@@ -1,0 +1,158 @@
+name: build-image
+
+# Reproducibly builds the container image via `nix build .#docker`, pushes it
+# to GHCR, and attaches a Sigstore-signed SLSA v1.0 build-provenance attestation
+# to the pushed manifest. Paste the resulting `@sha256:...` reference into
+# `tinfoil-config.yml` → `containers[].image`.
+#
+# Preconditions:
+#   - `flake.lock` is committed. `nix build` in the GHA sandbox has no network,
+#     so unlocked flake inputs fail the build.
+#   - `Cargo.lock` is committed (crane's buildPackage runs with --locked).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write        # push to ghcr.io
+  id-token: write        # OIDC for Sigstore signing
+  attestations: write    # actions/attest-build-provenance
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-publish-attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v14
+        with:
+          extra-conf: |
+            accept-flake-config = true
+            experimental-features = nix-command flakes
+
+      - name: Nix store cache
+        uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Flake check (build + clippy + fmt + tests)
+        run: nix flake check --print-build-logs
+
+      - name: Build OCI image via flake
+        run: |
+          nix build --print-build-logs .#docker
+          ls -lh result
+
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+
+      - name: Compute tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Push image with skopeo (byte-preserving)
+        id: push
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_PASS: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # The digest the Nix-built archive will carry in any OCI registry.
+          # Pure function of flake.lock + Cargo.lock + source — no docker
+          # daemon in the loop, no layer recompression.
+          archive_digest=$(skopeo inspect --format '{{.Digest}}' docker-archive:./result)
+          echo "pre-push archive digest: $archive_digest"
+
+          creds="$GHCR_USER:$GHCR_PASS"
+          primary=$(head -n1 <<< "$TAGS")
+
+          skopeo copy \
+            --digestfile /tmp/digest.txt \
+            --dest-creds "$creds" \
+            docker-archive:./result \
+            "docker://$primary"
+
+          pushed_digest=$(cat /tmp/digest.txt)
+          echo "pushed digest: $pushed_digest"
+          if [ "$pushed_digest" != "$archive_digest" ]; then
+            echo "WARNING: registry digest differs from archive digest" >&2
+            echo "  archive: $archive_digest" >&2
+            echo "  pushed:  $pushed_digest" >&2
+          fi
+
+          # Additional tags — registry-side only, no layer re-transfer.
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            [ "$tag" = "$primary" ] && continue
+            image_no_tag="${tag%:*}"
+            skopeo copy \
+              --src-creds "$creds" \
+              --dest-creds "$creds" \
+              "docker://${image_no_tag}@${pushed_digest}" \
+              "docker://$tag"
+          done <<< "$TAGS"
+
+          echo "digest=$pushed_digest" >> "$GITHUB_OUTPUT"
+          echo "image-ref=${REGISTRY}/${IMAGE_NAME}@${pushed_digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest SLSA build provenance
+        id: attest
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Job summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE_REF: ${{ steps.push.outputs.image-ref }}
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          {
+            echo "## Published image"
+            echo
+            echo '```'
+            echo "$IMAGE_REF"
+            echo '```'
+            echo
+            echo "### Tags applied"
+            echo '```'
+            echo "$TAGS"
+            echo '```'
+            echo
+            echo "### Verify provenance"
+            echo '```'
+            echo "gh attestation verify oci://$IMAGE_REF --owner ${{ github.repository_owner }}"
+            echo '```'
+            echo
+            echo "Attestation: $ATTESTATION_URL"
+            echo
+            echo "### tinfoil-config.yml snippet"
+            echo '```yaml'
+            echo "containers:"
+            echo "  - name: \"gated-inference\""
+            echo "    image: \"$IMAGE_REF\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
