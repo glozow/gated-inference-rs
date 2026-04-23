@@ -34,6 +34,9 @@
           pkg-config
           cmake
           clang # llama-cpp-sys-2's build.rs invokes cmake → c/c++ toolchain.
+          # Exports LIBCLANG_PATH + BINDGEN_EXTRA_CLANG_ARGS so llama-cpp-sys-2's
+          # bindgen step can find libclang.so and the standard-library headers.
+          rustPlatform.bindgenHook
         ];
 
         buildInputs = with pkgs; [
