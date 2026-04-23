@@ -21,7 +21,7 @@ use axum::{
 use gated_inference::{
     llama::LlamaSession,
     verifier::{SignedPayload, VerifyError},
-    Signer, Verifier,
+    Backend, Signer, Verifier,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -38,7 +38,7 @@ use tracing::{error, info};
 struct AppState {
     verifier: Verifier,
     signer: Signer,
-    llama: Mutex<LlamaSession>,
+    backend: Mutex<Backend>,
     boot_time: i64,
 }
 
@@ -69,10 +69,17 @@ async fn main() -> Result<()> {
     let nonce_cache_size: usize = env_parsed("NONCE_CACHE_SIZE", 10_000);
     let port: u16 = env_parsed("PORT", 8080);
 
-    info!(model = %model_path.display(), n_ctx, max_tokens, "loading LLM weights");
-    let llama = LlamaSession::load(&model_path, n_ctx, max_tokens)
-        .context("loading llama model")?;
-    info!("model loaded");
+    let stub_mode = std::env::var("LLM_STUB").ok().as_deref() == Some("1");
+    let backend = if stub_mode {
+        info!("LLM_STUB=1 — skipping model load, using deterministic stub backend");
+        Backend::Stub
+    } else {
+        info!(model = %model_path.display(), n_ctx, max_tokens, "loading LLM weights");
+        let llama = LlamaSession::load(&model_path, n_ctx, max_tokens)
+            .context("loading llama model")?;
+        info!("model loaded");
+        Backend::Llama(llama)
+    };
 
     let verifier = Verifier::new(&authorized_pubkey, max_age_secs, nonce_cache_size)
         .context("initializing verifier (check AUTHORIZED_PUBKEY format)")?;
@@ -85,7 +92,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState {
         verifier,
         signer,
-        llama: Mutex::new(llama),
+        backend: Mutex::new(backend),
         boot_time,
     });
 
@@ -147,10 +154,10 @@ async fn generate(
     };
 
     let t_llm = Instant::now();
-    let output = match s.llama.lock().await.generate(&payload.prompt) {
+    let output = match s.backend.lock().await.generate(&payload.prompt) {
         Ok(o) => o,
         Err(e) => {
-            error!("llama generate failed: {e:#}");
+            error!("backend generate failed: {e:#}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "inference failed" })),

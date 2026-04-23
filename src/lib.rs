@@ -9,10 +9,12 @@
 //! keypair, so archived `(result, signature, public_key)` blobs can be
 //! re-verified later without the server still being alive.
 
+pub mod backend;
 pub mod canonical_json;
 pub mod llama;
 pub mod signer;
 pub mod verifier;
 
+pub use backend::Backend;
 pub use signer::Signer;
 pub use verifier::{Payload, SignedPayload, Verifier, VerifyError};
