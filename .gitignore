@@ -1,0 +1,9 @@
+/target
+/result
+/result-*
+**/*.rs.bk
+.direnv/
+.envrc.local
+__pycache__/
+*.pyc
+/models/*.gguf
