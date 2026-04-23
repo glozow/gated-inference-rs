@@ -116,6 +116,17 @@ jobs:
           echo "digest=$pushed_digest" >> "$GITHUB_OUTPUT"
           echo "image-ref=${REGISTRY}/${IMAGE_NAME}@${pushed_digest}" >> "$GITHUB_OUTPUT"
 
+      # attest-build-provenance uses ORAS internally to push the attestation
+      # reference to the registry. ORAS reads creds from ~/.docker/config.json,
+      # which docker/login-action writes. Skopeo has its own --dest-creds and
+      # doesn't need this, so we only log in right before the attest step.
+      - name: Log in to GHCR (for attestation push)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Attest SLSA build provenance
         id: attest
         uses: actions/attest-build-provenance@v1
